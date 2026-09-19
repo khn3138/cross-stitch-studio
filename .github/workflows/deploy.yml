@@ -1,0 +1,103 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: 빌드 (src+data -> dist/)
+        run: python3 build.py
+
+      - name: Pages 아티팩트 업로드
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+      - name: dist zip 만들기 (릴리즈 첨부용)
+        run: |
+          VERSION=$(cat VERSION)
+          cd dist
+          zip -r "../cross-stitch-studio-v${VERSION}.zip" .
+
+      - name: dist zip 아티팩트 업로드
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-zip
+          path: cross-stitch-studio-v*.zip
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Pages 배포
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 버전 확인 및 태그 존재 여부
+        id: ver
+        run: |
+          VERSION=$(cat VERSION)
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          if git rev-parse "v$VERSION" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: dist zip 다운로드
+        if: steps.ver.outputs.exists == 'false'
+        uses: actions/download-artifact@v4
+        with:
+          name: dist-zip
+
+      - name: 릴리즈 노트에서 이번 버전 섹션 추출
+        if: steps.ver.outputs.exists == 'false'
+        run: |
+          awk -v ver="${{ steps.ver.outputs.version }}" '
+            BEGIN { printing=0 }
+            /^## / {
+              if (printing) exit
+              if (index($0, "v" ver) > 0) { printing=1; next }
+            }
+            printing { print }
+          ' RELEASE_NOTES.md > release-body.md
+          if [ ! -s release-body.md ]; then
+            echo "릴리즈 v${{ steps.ver.outputs.version }}" > release-body.md
+          fi
+
+      - name: GitHub Release 생성
+        if: steps.ver.outputs.exists == 'false'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.ver.outputs.version }}
+          name: v${{ steps.ver.outputs.version }}
+          body_path: release-body.md
+          files: cross-stitch-studio-v${{ steps.ver.outputs.version }}.zip

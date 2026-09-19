@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0D6663">
+<title>땀땀 십자수 도안</title>
+<meta name="description" content="사진을 십자수 도안으로 변환하고, 직접 그리고 편집하고, PDF로 출력하는 오프라인 웹앱">
+<link rel="manifest" href="./manifest.webmanifest">
+<link rel="icon" href="./icons/icon-192.png">
+<link rel="apple-touch-icon" href="./icons/icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>/*__CSS__*/</style>
+</head>
+<body>
+<div id="app">
+
+  <!-- 상단바 -->
+  <div class="topbar" id="topbar">
+    <div class="brand" id="brand-home">
+      <svg class="brand-mark" viewBox="0 0 26 26" fill="none"><path d="M4 4 L22 22 M22 4 L4 22" stroke="#0D6663" stroke-width="3.4" stroke-linecap="round"/></svg>
+      <span class="brand-text">땀땀 십자수 도안</span>
+    </div>
+    <input id="title-input" class="title-input only-editor" maxlength="60" spellcheck="false">
+    <span id="save-state" class="save-state only-editor">저장됨</span>
+    <div class="spacer"></div>
+    <div id="topbar-editor-actions" class="only-editor" style="gap:6px;align-items:center">
+      <button class="icon-btn" id="btn-undo" title="되돌리기 (Ctrl+Z)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg></button>
+      <button class="icon-btn" id="btn-redo" title="다시하기 (Ctrl+Shift+Z)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 14l5-5-5-5"/><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13"/></svg></button>
+      <div class="tool-sep" style="height:22px;margin:0 2px"></div>
+      <button class="btn sm" id="btn-export-menu">내보내기</button>
+      <button class="btn sm ghost" id="btn-more-menu">더보기</button>
+      <button class="icon-btn only-mobile" id="btn-panel-toggle" title="패널"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button>
+      <button class="icon-btn" id="btn-close-editor" title="목록으로"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+    </div>
+  </div>
+
+  <!-- 내 도안(라이브러리) -->
+  <div id="library">
+    <div class="lib-inner">
+      <div class="lib-head">
+        <div>
+          <h1>내 도안</h1>
+          <p class="store-note"><span class="dot"></span>이 기기 브라우저에 저장됨 · 기기 변경 전 전체 백업 권장</p>
+        </div>
+        <div class="lib-actions">
+          <button class="btn primary" id="btn-new-pattern">＋ 새 도안</button>
+          <button class="btn" id="btn-import-photo">사진으로 만들기</button>
+          <button class="btn ghost" id="btn-open-file">파일 불러오기</button>
+          <button class="btn ghost" id="btn-backup">전체 백업</button>
+        </div>
+      </div>
+      <div class="grid" id="lib-grid"></div>
+      <div class="empty" id="lib-empty" hidden>아직 저장된 도안이 없어요. 예시 도안을 만들고 있어요…</div>
+    </div>
+  </div>
+  <input type="file" id="file-open-input" accept="application/json,.json" hidden>
+  <input type="file" id="file-backup-input" accept="application/json,.json" hidden>
+  <input type="file" id="file-photo-input" accept="image/*" hidden>
+
+  <!-- 편집기 -->
+  <div id="editor">
+    <div class="toolbar" id="toolbar"></div>
+    <div class="center">
+      <div class="optbar" id="optbar"></div>
+      <div class="canvas-wrap" id="canvas-wrap">
+        <canvas id="cv"></canvas>
+        <div class="hint" id="hint" hidden></div>
+        <div class="selbar" id="selbar" hidden></div>
+      </div>
+    </div>
+    <div class="panel" id="panel">
+      <button class="icon-btn panel-close" id="panel-close" title="닫기"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+      <div class="panel-scroll" id="panel-scroll"></div>
+    </div>
+  </div>
+
+  <div id="modal-root"></div>
+  <div id="menu-root"></div>
+  <div id="toast-root"></div>
+  <div id="update-banner-root"></div>
+</div>
+
+<script>window.APP_DMC_DATA = "__DMC__"; window.APP_VERSION = "__VERSION__";</script>
+<script src="./vendor/jspdf.umd.min.js"></script>
+<script>/*__APP__*/</script>
+</body>
+</html>
