@@ -314,7 +314,7 @@ function makeSampleHeart(){
 /* ============================================================
    저장소(Storage) 어댑터
    ============================================================ */
-var Storage = (function(){
+var LocalStore = (function(){
   var mode = null; // 'idb' | 'ls' | 'mem'
   var db = null;
   var mem = {};
@@ -410,6 +410,89 @@ var Storage = (function(){
   }
   return { init:init, put:put, get:get, del:del, listAll:listAll, mode:function(){return mode;} };
 })();
+
+/* ============================================================
+   Google 로그인 + 클라우드 동기화 (선택 기능)
+   로그인하지 않으면 이 블록은 아무 것도 하지 않고, 앱은 이전처럼
+   완전 로컬(LocalStore)로만 동작한다. 로그인한 경우에만 Firestore로
+   실시간 동기화하며, Firestore 자체 오프라인 캐시로 오프라인에서도
+   읽기/쓰기가 되고 재연결 시 자동 동기화된다.
+   ============================================================ */
+var Auth = (function(){
+  var enabled = !!(window.APP_FIREBASE_CONFIG && window.APP_FIREBASE_CONFIG.enabled);
+  var authInst=null, user=null;
+  var listeners=[];
+  function fire(){ listeners.forEach(function(fn){ try{ fn(user); }catch(e){} }); }
+  // init()은 최초 로그인 상태가 확정될 때 그 사용자로 resolve된다 (비활성/실패 시 null).
+  // 이후의 변화(로그인·로그아웃 버튼, 세션 만료)는 onChange 리스너로만 통지한다.
+  function init(){
+    if(!enabled || !window.firebase){ enabled=false; return Promise.resolve(null); }
+    try{
+      firebase.initializeApp(window.APP_FIREBASE_CONFIG);
+      authInst = firebase.auth();
+    }catch(e){ console.error('Firebase init 실패', e); enabled=false; return Promise.resolve(null); }
+    return new Promise(function(resolve){
+      var first=true;
+      authInst.onAuthStateChanged(function(u){
+        user=u;
+        if(first){ first=false; resolve(u); }
+        else fire();
+      });
+    });
+  }
+  function signIn(){
+    if(!enabled) return Promise.reject(new Error('disabled'));
+    var provider = new firebase.auth.GoogleAuthProvider();
+    return authInst.signInWithPopup(provider).catch(function(err){
+      if(err && (err.code==='auth/popup-blocked'||err.code==='auth/operation-not-supported-in-this-environment'||err.code==='auth/cancelled-popup-request')){
+        return authInst.signInWithRedirect(provider);
+      }
+      throw err;
+    });
+  }
+  function signOut(){ return enabled ? authInst.signOut() : Promise.resolve(); }
+  function onChange(fn){ listeners.push(fn); }
+  return { isEnabled:function(){return enabled;}, init:init, signIn:signIn, signOut:signOut, onChange:onChange, currentUser:function(){return user;} };
+})();
+
+var CloudStore = (function(){
+  var db=null, unsub=null;
+  function ensureDb(){ if(!db) db = firebase.firestore(); return db; }
+  function col(){
+    var u = Auth.currentUser();
+    if(!u) throw new Error('로그인이 필요해요');
+    return ensureDb().collection('users').doc(u.uid).collection('patterns');
+  }
+  function init(){
+    if(!Auth.isEnabled()) return Promise.resolve();
+    try{
+      ensureDb().enablePersistence({synchronizeTabs:true}).catch(function(){});
+    }catch(e){}
+    return Promise.resolve();
+  }
+  function put(pat){ return col().doc(pat.id).set(serialize(pat)); }
+  function get(id){ return col().doc(id).get().then(function(d){ return d.exists? deserialize(d.data()) : null; }); }
+  function del(id){ return col().doc(id).delete(); }
+  function listAll(){ return col().get().then(function(snap){ var out=[]; snap.forEach(function(d){ out.push(deserialize(d.data())); }); return out; }); }
+  function watch(onData){
+    unwatch();
+    unsub = col().onSnapshot({includeMetadataChanges:true}, function(snap){
+      var out=[]; snap.forEach(function(d){ out.push(deserialize(d.data())); });
+      onData(out, {fromCache: snap.metadata.fromCache});
+    }, function(err){ console.error('동기화 오류', err); });
+  }
+  function unwatch(){ if(unsub){ unsub(); unsub=null; } }
+  return { init:init, put:put, get:get, del:del, listAll:listAll, watch:watch, unwatch:unwatch };
+})();
+
+// 저장소 파사드: 로그인 상태에 따라 LocalStore ↔ CloudStore로 자동 전환
+var Data = {
+  init: function(){ return Promise.all([LocalStore.init(), CloudStore.init()]); },
+  put: function(pat){ return (Auth.currentUser()?CloudStore:LocalStore).put(pat); },
+  get: function(id){ return (Auth.currentUser()?CloudStore:LocalStore).get(id); },
+  del: function(id){ return (Auth.currentUser()?CloudStore:LocalStore).del(id); },
+  listAll: function(){ return (Auth.currentUser()?CloudStore:LocalStore).listAll(); }
+};
 
 /* ============================================================
    전역 상태
@@ -588,18 +671,19 @@ function makeThumb(pat, size){
   return out.toDataURL('image/png');
 }
 
-function refreshLibraryMeta(){
-  return Storage.listAll().then(function(list){
-    list.sort(function(a,b){ return b.updated-a.updated; });
-    S.patternsMeta = list.map(function(pat){
-      return {
-        id:pat.id, name:pat.name, w:pat.w, h:pat.h,
-        colorCount: patternColorCount(pat), updated: pat.updated,
-        progress: patternProgress(pat), thumb: makeThumb(pat)
-      };
-    });
-    return list;
+function applyLibraryList(list){
+  list.sort(function(a,b){ return b.updated-a.updated; });
+  S.patternsMeta = list.map(function(pat){
+    return {
+      id:pat.id, name:pat.name, w:pat.w, h:pat.h,
+      colorCount: patternColorCount(pat), updated: pat.updated,
+      progress: patternProgress(pat), thumb: makeThumb(pat)
+    };
   });
+  return list;
+}
+function refreshLibraryMeta(){
+  return Data.listAll().then(applyLibraryList);
 }
 
 function renderLibrary(){
@@ -640,23 +724,23 @@ function iconExport(){ return svg('<path d="M12 3v12M7 8l5-5 5 5"/><path d="M5 2
 function iconTrash(){ return svg('<path d="M4 7h16M9 7V4h6v3M6 7l1 14h10l1-14"/>'); }
 
 function openPattern(id){
-  Storage.get(id).then(function(pat){
+  Data.get(id).then(function(pat){
     if(!pat){ toast('도안을 열 수 없어요'); return; }
     S.pat = pat;
     enterEditor();
   });
 }
 function duplicatePattern(id){
-  Storage.get(id).then(function(pat){
+  Data.get(id).then(function(pat){
     if(!pat) return;
     var copy = clonePattern(pat);
     copy.id = uid(); copy.name = pat.name+' (사본)';
     copy.created = Date.now(); copy.updated = Date.now();
-    return Storage.put(copy);
+    return Data.put(copy);
   }).then(function(){ return refreshLibraryMeta(); }).then(function(){ renderLibrary(); toast('복제했어요'); });
 }
 function exportPatternJSONById(id){
-  Storage.get(id).then(function(pat){
+  Data.get(id).then(function(pat){
     if(!pat) return;
     var blob = new Blob([JSON.stringify(serialize(pat))], {type:'application/json'});
     downloadBlob(safeFileName(pat.name)+'.json', blob);
@@ -667,7 +751,7 @@ function deletePattern(id){
   var m = S.patternsMeta.find(function(x){return x.id===id;});
   confirmModal('도안 삭제', (m?('"'+m.name+'" '):'')+'도안을 삭제할까요? 되돌릴 수 없어요.', {danger:true, okLabel:'삭제'}).then(function(ok){
     if(!ok) return;
-    Storage.del(id).then(function(){ return refreshLibraryMeta(); }).then(function(){ renderLibrary(); toast('삭제했어요'); });
+    Data.del(id).then(function(){ return refreshLibraryMeta(); }).then(function(){ renderLibrary(); toast('삭제했어요'); });
   });
 }
 
@@ -695,7 +779,7 @@ function createNewPattern(){
     var pat = newPattern(w,h,name);
     pat.fabric = fabric;
     closeModal();
-    Storage.put(pat).then(function(){ S.pat=pat; enterEditor(); });
+    Data.put(pat).then(function(){ S.pat=pat; enterEditor(); });
   };
 }
 function fabricOptions(sel){
@@ -707,7 +791,7 @@ function clamp(v,a,b){ return Math.max(a,Math.min(b,v)); }
 
 /* 전체 백업 / 복원 */
 function backupAll(){
-  Storage.listAll().then(function(list){
+  Data.listAll().then(function(list){
     var data = { app:'ttamttam-backup', v:1, exported: Date.now(), patterns: list.map(serialize) };
     var blob = new Blob([JSON.stringify(data)], {type:'application/json'});
     downloadBlob('ttamttam-backup-'+new Date().toISOString().slice(0,10)+'.json', blob);
@@ -720,13 +804,13 @@ function restoreBackupFile(file){
       var data = JSON.parse(reader.result);
       var list = data.patterns || (data.app==='ttamttam'?[data]:[]);
       if(!list.length){ toast('불러올 도안이 없어요'); return; }
-      Storage.listAll().then(function(existing){
+      Data.listAll().then(function(existing){
         var ids = new Set(existing.map(function(p){return p.id;}));
         var ops = list.map(function(raw){
           var pat = deserialize(raw);
           if(ids.has(pat.id)) pat.id = uid();
           ids.add(pat.id);
-          return Storage.put(pat);
+          return Data.put(pat);
         });
         return Promise.all(ops);
       }).then(function(){ return refreshLibraryMeta(); }).then(function(){ renderLibrary(); toast(list.length+'개 도안을 불러왔어요'); });
@@ -740,10 +824,10 @@ function openSingleFile(file){
     try{
       var raw = JSON.parse(reader.result);
       var pat = deserialize(raw);
-      Storage.listAll().then(function(existing){
+      Data.listAll().then(function(existing){
         var ids = new Set(existing.map(function(p){return p.id;}));
         if(ids.has(pat.id)) pat.id = uid();
-        return Storage.put(pat);
+        return Data.put(pat);
       }).then(function(){ return refreshLibraryMeta(); }).then(function(){ renderLibrary(); toast('도안을 불러왔어요'); });
     }catch(e){ toast('파일을 읽을 수 없어요'); }
   };
@@ -803,7 +887,7 @@ function markDirty(){
 function flushSave(sync){
   if(!S.pat || !S.dirty) return Promise.resolve();
   clearTimeout(S.saveTimer);
-  return Storage.put(S.pat).then(function(){
+  return Data.put(S.pat).then(function(){
     S.dirty=false; setSaveState('saved');
   }).catch(function(){ setSaveState('error'); toast('저장에 실패했어요'); });
 }
@@ -2119,7 +2203,7 @@ function initTopbarMenus(){
 function saveAsCopy(){
   var copy = clonePattern(S.pat);
   copy.id=uid(); copy.name=S.pat.name+' (사본)'; copy.created=Date.now(); copy.updated=Date.now();
-  Storage.put(copy).then(function(){ toast('사본으로 저장했어요'); });
+  Data.put(copy).then(function(){ toast('사본으로 저장했어요'); });
 }
 function resetAllDone(){
   confirmModal('진행 해제', '모든 진행 체크를 해제할까요?').then(function(ok){
@@ -2248,7 +2332,7 @@ function openImportModal(prefillFile){
     pat.types = new Uint8Array(resultData.cells.length);
     for(var i=0;i<pat.types.length;i++){ if(pat.cells[i]>=0) pat.types[i]=1; }
     closeModal();
-    Storage.put(pat).then(function(){ S.pat=pat; enterEditor(); toast('사진에서 도안을 만들었어요'); });
+    Data.put(pat).then(function(){ S.pat=pat; enterEditor(); toast('사진에서 도안을 만들었어요'); });
   };
   if(prefillFile) setImage(prefillFile);
 }
@@ -2614,6 +2698,76 @@ function showUpdateBanner(reg){
 }
 
 /* ============================================================
+   계정 / 클라우드 동기화 UI
+   ============================================================ */
+function iconGoogle(){
+  return '<svg width="18" height="18" viewBox="0 0 18 18"><path fill="#4285F4" d="M17.64 9.2c0-.64-.06-1.25-.16-1.84H9v3.48h4.84c-.21 1.13-.85 2.08-1.8 2.72v2.26h2.92c1.7-1.57 2.68-3.88 2.68-6.62z"/><path fill="#34A853" d="M9 18c2.43 0 4.47-.8 5.96-2.18l-2.92-2.26c-.81.54-1.84.86-3.04.86-2.34 0-4.32-1.58-5.03-3.7H.96v2.33C2.44 15.98 5.48 18 9 18z"/><path fill="#FBBC05" d="M3.97 10.72A5.41 5.41 0 0 1 3.68 9c0-.6.1-1.18.29-1.72V4.95H.96A9 9 0 0 0 0 9c0 1.45.35 2.83.96 4.05l3.01-2.33z"/><path fill="#EA4335" d="M9 3.58c1.32 0 2.51.46 3.44 1.35l2.59-2.59C13.46.89 11.43 0 9 0 5.48 0 2.44 2.02.96 4.95l3.01 2.33C4.68 5.16 6.66 3.58 9 3.58z"/></svg>';
+}
+function updateStoreNote(){
+  var el = $('#store-note-text');
+  if(!el) return;
+  var user = Auth.isEnabled() ? Auth.currentUser() : null;
+  el.textContent = user
+    ? ('Google 계정('+(user.email||user.displayName||'')+')에 저장됨 · 다른 기기에서도 로그인하면 보여요')
+    : '이 기기 브라우저에 저장됨 · 기기 변경 전 전체 백업 권장';
+}
+function renderAccountBox(){
+  updateStoreNote();
+  var box = $('#account-box');
+  if(!box) return;
+  if(!Auth.isEnabled()){ box.innerHTML=''; return; }
+  var user = Auth.currentUser();
+  if(user){
+    box.innerHTML =
+      '<span class="small muted sync-status" id="sync-status" style="white-space:nowrap"></span>'+
+      (user.photoURL? '<img src="'+user.photoURL+'" alt="" style="width:26px;height:26px;border-radius:50%">' : '')+
+      '<button class="btn ghost sm" id="btn-sign-out">로그아웃</button>';
+    $('#btn-sign-out',box).onclick = function(){ Auth.signOut(); };
+    setSyncStatusText(S.lastSyncFromCache?'오프라인 · 재연결 시 동기화':'동기화됨');
+  } else {
+    box.innerHTML = '<button class="btn ghost sm" id="btn-sign-in">'+iconGoogle()+' Google로 로그인</button>';
+    $('#btn-sign-in',box).onclick = function(){
+      Auth.signIn().catch(function(err){ console.error(err); toast('로그인에 실패했어요'); });
+    };
+  }
+}
+function setSyncStatusText(t){
+  var el = $('#sync-status');
+  if(el) el.textContent = t;
+}
+function startCloudWatch(){
+  CloudStore.watch(function(list, meta){
+    S.lastSyncFromCache = meta.fromCache;
+    setSyncStatusText(meta.fromCache? '오프라인 · 재연결 시 동기화' : '동기화됨');
+    if(!S.pat){ applyLibraryList(list); renderLibrary(); }
+  });
+}
+function mergeLocalIntoCloud(){
+  return Promise.all([LocalStore.listAll(), CloudStore.listAll()]).then(function(res){
+    var local = res[0], cloudIds = new Set(res[1].map(function(p){return p.id;}));
+    var orphans = local.filter(function(p){ return !cloudIds.has(p.id); });
+    if(!orphans.length) return;
+    return confirmModal('도안 업로드', '이 기기에만 있는 도안 '+orphans.length+'개를 계정으로 업로드해서 다른 기기에서도 볼 수 있게 할까요?', {okLabel:'업로드'}).then(function(ok){
+      if(!ok) return;
+      return Promise.all(orphans.map(function(p){ return CloudStore.put(p).then(function(){ return LocalStore.del(p.id); }); }))
+        .then(function(){ toast(orphans.length+'개 도안을 업로드했어요'); });
+    });
+  });
+}
+function handleAuthChange(user){
+  renderAccountBox();
+  if(user){
+    mergeLocalIntoCloud().then(function(){
+      startCloudWatch();
+      if(!S.pat) refreshLibraryMeta().then(renderLibrary);
+    });
+  } else {
+    CloudStore.unwatch();
+    if(!S.pat) refreshLibraryMeta().then(renderLibrary);
+  }
+}
+
+/* ============================================================
    초기화
    ============================================================ */
 function initLibraryButtons(){
@@ -2632,22 +2786,25 @@ function init(){
   setupPointerEvents();
   window.addEventListener('resize', function(){ if(S.pat) drawEditor(); });
 
-  Storage.init().then(function(){
+  Auth.init().then(function(initialUser){
+    renderAccountBox();
+    return Data.init().then(function(){
+      return initialUser ? mergeLocalIntoCloud() : null;
+    });
+  }).then(function(){
     return refreshLibraryMeta();
   }).then(function(list){
     if(list.length===0){
       var sample = makeSampleHeart();
-      return Storage.put(sample).then(refreshLibraryMeta);
+      return Data.put(sample).then(refreshLibraryMeta);
     }
   }).then(function(){
     renderLibrary();
+    if(Auth.currentUser()) startCloudWatch();
+    Auth.onChange(handleAuthChange);
   });
 
   registerSW();
-  var vtag = document.createElement('div');
-  vtag.className='version-tag';
-  vtag.textContent='v'+VERSION;
-  $('#panel-scroll') && null;
 }
 
 if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', init);

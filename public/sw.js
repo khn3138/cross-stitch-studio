@@ -8,7 +8,10 @@ var PRECACHE = [
   './icons/icon-192.png',
   './icons/icon-512.png',
   './icons/icon-maskable-512.png',
-  './vendor/jspdf.umd.min.js'
+  './vendor/jspdf.umd.min.js',
+  './vendor/firebase-app-compat.js',
+  './vendor/firebase-auth-compat.js',
+  './vendor/firebase-firestore-compat.js'
 ];
 
 self.addEventListener('install', function(e){

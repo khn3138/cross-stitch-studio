@@ -17,6 +17,9 @@ PUBLIC = os.path.join(ROOT, "public")
 DIST = os.path.join(ROOT, "dist")
 
 JSPDF_URL = "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"
+FIREBASE_VERSION = "10.13.2"
+FIREBASE_FILES = ["firebase-app-compat.js", "firebase-auth-compat.js", "firebase-firestore-compat.js"]
+FIREBASE_BASE_URL = "https://www.gstatic.com/firebasejs/" + FIREBASE_VERSION + "/"
 
 
 def read(path):
@@ -34,6 +37,34 @@ def get_version():
     return read(os.path.join(ROOT, "VERSION")).strip()
 
 
+def get_firebase_config():
+    path = os.path.join(ROOT, "firebase-config.json")
+    if not os.path.exists(path):
+        return {"enabled": False}
+    return json.loads(read(path))
+
+
+def download_vendor_file(url, dest_path, cache_path, label):
+    """CDN에서 받아 dest_path에 쓰고 cache_path에도 백업. 실패 시 캐시로 대체."""
+    try:
+        print(label, "다운로드 중...", url)
+        req = urllib.request.Request(url, headers={"User-Agent": "build.py"})
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = resp.read()
+        with open(dest_path, "wb") as f:
+            f.write(data)
+        os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+        shutil.copy2(dest_path, cache_path)
+        print(label, "다운로드 완료:", len(data), "bytes")
+    except Exception as e:
+        if os.path.exists(cache_path):
+            print(label, "다운로드 실패, 캐시 사용:", e)
+            shutil.copy2(cache_path, dest_path)
+        else:
+            print("경고:", label, "을(를) 받지 못했어요:", e, file=sys.stderr)
+            write(dest_path, "/* " + label + " download failed at build time */\n")
+
+
 def build():
     if os.path.exists(DIST):
         shutil.rmtree(DIST)
@@ -41,6 +72,7 @@ def build():
 
     version = get_version()
     print("버전:", version)
+    firebase_config = get_firebase_config()
 
     css = read(os.path.join(SRC, "style.css"))
     app_js = read(os.path.join(SRC, "app.js"))
@@ -51,6 +83,7 @@ def build():
     html = html.replace("/*__APP__*/", app_js)
     html = html.replace("__DMC__", dmc)
     html = html.replace("__VERSION__", version)
+    html = html.replace("__FIREBASE_CONFIG__", json.dumps(firebase_config, ensure_ascii=False))
 
     write(os.path.join(DIST, "index.html"), html)
 
@@ -66,28 +99,24 @@ def build():
         else:
             shutil.copy2(src_path, dst_path)
 
-    # jsPDF 벤더 다운로드 (오프라인 캐시용)
+    # 벤더 라이브러리 다운로드 (오프라인 캐시용): jsPDF + Firebase(compat)
     vendor_dir = os.path.join(DIST, "vendor")
     os.makedirs(vendor_dir, exist_ok=True)
-    vendor_path = os.path.join(vendor_dir, "jspdf.umd.min.js")
-    cached_vendor = os.path.join(ROOT, ".build-cache", "jspdf.umd.min.js")
-    try:
-        print("jsPDF 다운로드 중...", JSPDF_URL)
-        req = urllib.request.Request(JSPDF_URL, headers={"User-Agent": "build.py"})
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            data = resp.read()
-        with open(vendor_path, "wb") as f:
-            f.write(data)
-        os.makedirs(os.path.dirname(cached_vendor), exist_ok=True)
-        shutil.copy2(vendor_path, cached_vendor)
-        print("jsPDF 다운로드 완료:", len(data), "bytes")
-    except Exception as e:
-        if os.path.exists(cached_vendor):
-            print("jsPDF 다운로드 실패, 캐시 사용:", e)
-            shutil.copy2(cached_vendor, vendor_path)
-        else:
-            print("경고: jsPDF를 받지 못했어요 (PDF 내보내기가 동작하지 않을 수 있어요):", e, file=sys.stderr)
-            write(vendor_path, "/* jspdf download failed at build time */\n")
+    cache_dir = os.path.join(ROOT, ".build-cache")
+
+    download_vendor_file(
+        JSPDF_URL,
+        os.path.join(vendor_dir, "jspdf.umd.min.js"),
+        os.path.join(cache_dir, "jspdf.umd.min.js"),
+        "jsPDF",
+    )
+    for fname in FIREBASE_FILES:
+        download_vendor_file(
+            FIREBASE_BASE_URL + fname,
+            os.path.join(vendor_dir, fname),
+            os.path.join(cache_dir, fname),
+            fname,
+        )
 
     # version.json
     write(

@@ -26,6 +26,7 @@
     <input id="title-input" class="title-input only-editor" maxlength="60" spellcheck="false">
     <span id="save-state" class="save-state only-editor">저장됨</span>
     <div class="spacer"></div>
+    <div id="account-box" style="display:flex;gap:8px;align-items:center;flex:none"></div>
     <div id="topbar-editor-actions" class="only-editor" style="gap:6px;align-items:center">
       <button class="icon-btn" id="btn-undo" title="되돌리기 (Ctrl+Z)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg></button>
       <button class="icon-btn" id="btn-redo" title="다시하기 (Ctrl+Shift+Z)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 14l5-5-5-5"/><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13"/></svg></button>
@@ -43,7 +44,7 @@
       <div class="lib-head">
         <div>
           <h1>내 도안</h1>
-          <p class="store-note"><span class="dot"></span>이 기기 브라우저에 저장됨 · 기기 변경 전 전체 백업 권장</p>
+          <p class="store-note"><span class="dot"></span><span id="store-note-text">이 기기 브라우저에 저장됨 · 기기 변경 전 전체 백업 권장</span></p>
         </div>
         <div class="lib-actions">
           <button class="btn primary" id="btn-new-pattern">＋ 새 도안</button>
@@ -83,8 +84,11 @@
   <div id="update-banner-root"></div>
 </div>
 
-<script>window.APP_DMC_DATA = "__DMC__"; window.APP_VERSION = "__VERSION__";</script>
+<script>window.APP_DMC_DATA = "__DMC__"; window.APP_VERSION = "__VERSION__"; window.APP_FIREBASE_CONFIG = __FIREBASE_CONFIG__;</script>
 <script src="./vendor/jspdf.umd.min.js"></script>
+<script src="./vendor/firebase-app-compat.js"></script>
+<script src="./vendor/firebase-auth-compat.js"></script>
+<script src="./vendor/firebase-firestore-compat.js"></script>
 <script>/*__APP__*/</script>
 </body>
 </html>
