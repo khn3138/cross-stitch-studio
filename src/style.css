@@ -139,8 +139,14 @@ button{cursor:pointer}
 .panel-close{display:none}
 
 /* ---------- modal / menu / toast ---------- */
-.overlay{position:fixed;inset:0;background:rgba(10,16,18,.45);display:grid;place-items:center;z-index:50;padding:16px}
-.modal{background:var(--surface);border-radius:14px;box-shadow:var(--shadow);width:min(560px,100%);max-height:calc(100% - 16px);display:flex;flex-direction:column;border:1px solid var(--line)}
+/* overflow-y:auto + margin:auto on .modal (대신 place-items:center은 안 씀):
+   모바일 사파리처럼 뷰포트 계산이 흔들려 모달이 화면보다 커질 때도, 위쪽부터
+   자연스럽게 스크롤해서 잘린 하단 버튼까지 반드시 닿을 수 있게 함 */
+.overlay{position:fixed;inset:0;background:rgba(10,16,18,.45);display:flex;justify-content:center;overflow-y:auto;z-index:50;padding:16px}
+.modal{background:var(--surface);border-radius:14px;box-shadow:var(--shadow);width:min(560px,100%);max-height:calc(100vh - 32px);margin:auto 0;display:flex;flex-direction:column;border:1px solid var(--line);flex:none}
+@supports (height: 100dvh){
+  .modal{max-height:calc(100dvh - 32px)}
+}
 .modal.wide{width:min(920px,100%)}
 .modal-h{display:flex;align-items:center;justify-content:space-between;padding:14px 16px 10px;gap:12px}
 .modal-h h2{margin:0;font-size:17px;letter-spacing:-.01em}

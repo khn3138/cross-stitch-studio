@@ -153,6 +153,7 @@ function iconFill(){ return svg('<path d="M4 12l7-7 7 7-7 7z"/><path d="M4 12h14
 function iconEye(){ return svg('<path d="M17 3l4 4-11 11H6v-4z"/>'); }
 function iconSelect(){ return svg('<path d="M4 4h4M4 4v4M20 4h-4M20 4v4M4 20h4M4 20v-4M20 20h-4M20 20v-4"/>'); }
 function iconDone(){ return svg('<path d="M20 6 9 17l-5-5"/>'); }
+function iconPalette(){ return svg('<circle cx="9" cy="9.5" r="4.5"/><circle cx="15" cy="9.5" r="4.5"/><circle cx="12" cy="15.5" r="4.5"/>'); }
 
 /* ============================================================
    RLE
@@ -584,6 +585,7 @@ var S = {
   prevTool: 'full',
   halfDir: '/',
   curPaletteIdx: -1,
+  recentColors: [], // 최근 사용한 palette idx (최신순)
   view: {colorSym:'color'}, // color | symbol | both
   symH: false, symV: false,
   onlySelected: false,
@@ -929,6 +931,7 @@ function enterEditor(){
   app.classList.add('mode-editor');
   S.history=[]; S.future=[]; S.selection=null; S.clipboard=S.clipboard;
   S.curPaletteIdx = S.pat.palette.length?0:-1;
+  S.recentColors = [];
   S.tool='full'; S.zoom = fitZoom();
   $('#title-input').value = S.pat.name;
   buildToolbar(); buildOptbar(); buildPanel();
@@ -1333,6 +1336,17 @@ function ensurePaletteIdx(){
   }
   return S.curPaletteIdx;
 }
+function pushRecentColor(idx){
+  if(idx==null || idx<0) return;
+  S.recentColors = [idx].concat(S.recentColors.filter(function(i){ return i!==idx; })).slice(0,6);
+}
+// 실 선택(패널 목록/툴바 최근색/색 선택 팝업/스포이드에서 공통으로 사용)
+function selectPaletteIdx(idx){
+  S.curPaletteIdx = idx;
+  pushRecentColor(idx);
+  setTool(S.tool==='eye'?S.prevTool:S.tool);
+  buildToolbar(); buildPanel();
+}
 function mirroredCells(x,y){
   var out=[{x:x,y:y}];
   var w=S.pat.w,h=S.pat.h;
@@ -1439,9 +1453,10 @@ function eyedropAt(x,y){
   if(x<0||y<0||x>=S.pat.w||y>=S.pat.h) return;
   var i=y*S.pat.w+x;
   if(S.pat.types[i]!==0 && S.pat.cells[i]>=0){
+    pushRecentColor(S.pat.cells[i]);
     S.curPaletteIdx = S.pat.cells[i];
     setTool(S.prevTool||'full');
-    buildPanel();
+    buildToolbar(); buildPanel();
   }
 }
 function addBackstitchSeg(x1,y1,x2,y2){
@@ -1912,6 +1927,37 @@ function buildToolbar(){
     swatch.textContent=p.sym;
   } else { swatch.style.background='var(--surface-2)'; swatch.textContent='–'; }
   tb.appendChild(swatch);
+
+  // 최근 쓴 색 (현재색 제외, 최대 2개) — 클릭 한 번으로 바로 전환
+  var recents = S.recentColors.filter(function(idx){ return idx!==S.curPaletteIdx && S.pat.palette[idx]; }).slice(0,2);
+  recents.forEach(function(idx){
+    var rp = S.pat.palette[idx];
+    var rd = DMC_BY_CODE[rp.code];
+    var rrgb = rd?rd.rgb:{r:200,g:200,b:200};
+    var rsw = document.createElement('div');
+    rsw.className='sw'; rsw.style.cursor='pointer'; rsw.style.margin='3px auto';
+    rsw.title='DMC '+rp.code+(rd?(' '+rd.name):'');
+    rsw.style.background=rgbToHex(rrgb.r,rrgb.g,rrgb.b);
+    rsw.style.color=contrastSymbolColor(rrgb.r,rrgb.g,rrgb.b);
+    rsw.textContent=rp.sym;
+    rsw.onclick=function(){ selectPaletteIdx(idx); };
+    tb.appendChild(rsw);
+  });
+
+  // 색 선택(실 추가 + 기존 실 목록) 버튼
+  var pickBtn=document.createElement('button');
+  pickBtn.className='tool'; pickBtn.title='실 선택';
+  pickBtn.innerHTML=iconPalette();
+  pickBtn.onclick=openQuickColorPicker;
+  tb.appendChild(pickBtn);
+
+  // 스포이드 (도구 목록의 스포이드와 동일 동작 — 색 선택 버튼 옆에도 바로 접근 가능하게)
+  var eyeBtn=document.createElement('button');
+  eyeBtn.className='tool'+(S.tool==='eye'?' on':''); eyeBtn.title='스포이드 (I)';
+  eyeBtn.innerHTML=iconEye();
+  eyeBtn.onclick=function(){ setTool('eye'); };
+  tb.appendChild(eyeBtn);
+
   tb.onclick=function(e){
     var b=e.target.closest('[data-tool]'); if(!b) return;
     setTool(b.dataset.tool);
@@ -2103,7 +2149,7 @@ function buildPanel(){
   $('#btn-add-thread',root).onclick = openDmcPicker;
   var cleanBtn = $('#btn-clean-threads',root); if(cleanBtn) cleanBtn.onclick=cleanUnusedThreads;
   $$('.thread',root).forEach(function(el){
-    el.onclick=function(e){ if(e.target.closest('[data-menu]')) return; S.curPaletteIdx=parseInt(el.dataset.idx,10); setTool(S.tool==='eye'?S.prevTool:S.tool); buildToolbar(); buildPanel(); };
+    el.onclick=function(e){ if(e.target.closest('[data-menu]')) return; selectPaletteIdx(parseInt(el.dataset.idx,10)); };
   });
   $$('[data-menu]',root).forEach(function(b){
     b.onclick=function(e){ e.stopPropagation(); openThreadMenu(parseInt(b.dataset.menu,10), e.clientX, e.clientY); };
@@ -2185,6 +2231,28 @@ function openMergeThread(fromIdx){
 }
 
 /* DMC 선택 모달 */
+// 툴바에서 바로 여는 실 선택 팝업: 이미 쓰는 실 빠르게 선택 + 새 실 추가
+function openQuickColorPicker(){
+  var listHTML = S.pat.palette.map(function(p, idx){
+    var d = DMC_BY_CODE[p.code];
+    var rgb = d?d.rgb:{r:170,g:170,b:170};
+    var curStyle = idx===S.curPaletteIdx ? 'border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)' : '';
+    return '<button class="pk" data-idx="'+idx+'" style="'+curStyle+'">'+
+      '<i style="background:'+rgbToHex(rgb.r,rgb.g,rgb.b)+';display:flex;align-items:center;justify-content:center;color:'+contrastSymbolColor(rgb.r,rgb.g,rgb.b)+';font-weight:700">'+p.sym+'</i>'+
+      '<b>'+p.code+'</b><span>'+escapeHtml(d?d.name:'')+'</span>'+
+    '</button>';
+  }).join('');
+  var modal = openModal({
+    title:'실 선택',
+    bodyHTML: listHTML ? '<div class="picker-grid">'+listHTML+'</div>' : '<p class="muted small">아직 사용한 실이 없어요.</p>',
+    footerHTML: '<button class="btn ghost" id="qcp-cancel">닫기</button><button class="btn primary" id="qcp-add">+ 새 실 추가</button>'
+  });
+  $$('.pk',modal).forEach(function(b){
+    b.onclick=function(){ closeModal(); selectPaletteIdx(parseInt(b.dataset.idx,10)); };
+  });
+  $('#qcp-cancel',modal).onclick=closeModal;
+  $('#qcp-add',modal).onclick=function(){ closeModal(); openDmcPicker(); };
+}
 function openDmcPicker(replaceIdx){
   var usedCodes = new Set(S.pat.palette.map(function(p){return p.code;}));
   var modal = openModal({
@@ -2223,6 +2291,7 @@ function pickDmc(code, replaceIdx){
       S.pat.palette.push({code:code, sym:pickFreeSymbol()});
       S.curPaletteIdx = S.pat.palette.length-1;
     }
+    pushRecentColor(S.curPaletteIdx);
   }
   markDirty(); buildPanel(); buildToolbar(); drawEditor();
 }
