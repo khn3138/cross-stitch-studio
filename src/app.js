@@ -154,6 +154,8 @@ function iconEye(){ return svg('<path d="M17 3l4 4-11 11H6v-4z"/>'); }
 function iconSelect(){ return svg('<path d="M4 4h4M4 4v4M20 4h-4M20 4v4M4 20h4M4 20v-4M20 20h-4M20 20v-4"/>'); }
 function iconDone(){ return svg('<path d="M20 6 9 17l-5-5"/>'); }
 function iconPalette(){ return svg('<circle cx="9" cy="9.5" r="4.5"/><circle cx="15" cy="9.5" r="4.5"/><circle cx="12" cy="15.5" r="4.5"/>'); }
+function iconLinkOn(){ return svg('<path d="M9 15 15 9"/><path d="M10 6l1.5-1.5a4 4 0 0 1 5.66 5.66L15.5 11.66"/><path d="M14 18l-1.5 1.5a4 4 0 0 1-5.66-5.66L8.5 12.34"/>'); }
+function iconLinkOff(){ return svg('<path d="M9 15 15 9" opacity=".35"/><path d="M10 6l1-1a4 4 0 0 1 5.66 5.66l-1 1"/><path d="M14 18l-1 1a4 4 0 0 1-5.66-5.66l1-1"/><path d="M4 4l16 16"/>'); }
 
 /* ============================================================
    RLE
@@ -1379,6 +1381,23 @@ function mirrorType(type, hFlip, vFlip){
   }
   return type;
 }
+// 지금 도구·색으로 클릭했을 때 이 칸이 "완전히 똑같은" 결과가 될지 확인.
+// 그렇다면 (전체 스트로크 동안) 다시 그리는 대신 지운다 — 실수로 옆칸을
+// 칠했을 때 지우개로 안 바꾸고 같은 도구로 한 번 더 눌러서 바로 취소하기 위함.
+function stitchTargetMatches(c){
+  if(!S.pat || c.x<0||c.y<0||c.x>=S.pat.w||c.y>=S.pat.h) return false;
+  var pIdx = S.curPaletteIdx;
+  if(pIdx<0 || pIdx>=S.pat.palette.length) return false;
+  var i=c.y*S.pat.w+c.x;
+  if(S.pat.cells[i]!==pIdx) return false;
+  var finalType;
+  if(S.tool==='full') finalType=1;
+  else if(S.tool==='half') finalType = S.halfDir==='/'?2:3;
+  else if(S.tool==='quarter') finalType = 4+cornerFromHalf(c.halfx,c.halfy);
+  else if(S.tool==='three') finalType = 8+cornerFromHalf(c.halfx,c.halfy);
+  else return false;
+  return S.pat.types[i]===finalType;
+}
 function setStitch(x,y,type,corner){
   if(x<0||y<0||x>=S.pat.w||y>=S.pat.h) return;
   var pIdx = ensurePaletteIdx(); if(pIdx<0) return;
@@ -1655,23 +1674,43 @@ function cropToSelection(){
    캔버스 크기 변경
    ============================================================ */
 function resizeCanvasModal(){
+  var locked = false;
+  var ratio = S.pat.w / S.pat.h;
   openModal({
     title:'캔버스 크기 변경',
     bodyHTML:
       '<div class="stack">'+
-      '<div class="row2">'+
-        '<label class="field"><span>가로</span><input id="rs-w" type="number" min="4" max="'+MAX_DIM+'" value="'+S.pat.w+'"></label>'+
-        '<label class="field"><span>세로</span><input id="rs-h" type="number" min="4" max="'+MAX_DIM+'" value="'+S.pat.h+'"></label>'+
+      '<div style="display:flex;gap:8px;align-items:flex-end">'+
+        '<label class="field" style="flex:1"><span>가로</span><input id="rs-w" type="number" min="4" max="'+MAX_DIM+'" value="'+S.pat.w+'"></label>'+
+        '<button type="button" class="icon-btn" id="rs-lock" title="가로세로 비율 고정">'+iconLinkOff()+'</button>'+
+        '<label class="field" style="flex:1"><span>세로</span><input id="rs-h" type="number" min="4" max="'+MAX_DIM+'" value="'+S.pat.h+'"></label>'+
       '</div>'+
       '<label class="field"><span>기준점</span><select id="rs-anchor"><option value="tl">좌상단</option><option value="c">가운데</option></select></label>'+
       '</div>',
     footerHTML: '<button class="btn ghost" id="rs-cancel">취소</button><button class="btn primary" id="rs-ok">적용</button>'
   });
   var modal=$('#modal-root .modal');
+  var wInput=$('#rs-w',modal), hInput=$('#rs-h',modal), lockBtn=$('#rs-lock',modal);
+  lockBtn.onclick=function(){
+    locked=!locked;
+    if(locked) ratio = (parseInt(wInput.value,10)||S.pat.w) / (parseInt(hInput.value,10)||S.pat.h);
+    lockBtn.classList.toggle('on', locked);
+    lockBtn.innerHTML = locked ? iconLinkOn() : iconLinkOff();
+  };
+  wInput.oninput=function(){
+    if(!locked) return;
+    var w=parseInt(wInput.value,10); if(!w) return;
+    hInput.value = clamp(Math.round(w/ratio),4,MAX_DIM);
+  };
+  hInput.oninput=function(){
+    if(!locked) return;
+    var h=parseInt(hInput.value,10); if(!h) return;
+    wInput.value = clamp(Math.round(h*ratio),4,MAX_DIM);
+  };
   $('#rs-cancel',modal).onclick=closeModal;
   $('#rs-ok',modal).onclick=function(){
-    var nw=clamp(parseInt($('#rs-w',modal).value,10)||S.pat.w,4,MAX_DIM);
-    var nh=clamp(parseInt($('#rs-h',modal).value,10)||S.pat.h,4,MAX_DIM);
+    var nw=clamp(parseInt(wInput.value,10)||S.pat.w,4,MAX_DIM);
+    var nh=clamp(parseInt(hInput.value,10)||S.pat.h,4,MAX_DIM);
     var anchor=$('#rs-anchor',modal).value;
     closeModal();
     doResizeCanvas(nw,nh,anchor);
@@ -1802,7 +1841,8 @@ function setupPointerEvents(){
       return;
     }
     pushHistory();
-    drag={type:S.tool, last:c, startHalf:{x:c.halfx,y:c.halfy}};
+    var eraseMode = (S.tool==='full'||S.tool==='half'||S.tool==='quarter'||S.tool==='three') && stitchTargetMatches(c);
+    drag={type:S.tool, last:c, startHalf:{x:c.halfx,y:c.halfy}, eraseMode:eraseMode};
     doToolAt(c, true);
     drawEditor();
   }
@@ -1851,11 +1891,12 @@ function setupPointerEvents(){
     }
   }
   function doToolAt(c, isStart){
+    var eraseMode = drag && drag.eraseMode;
     switch(S.tool){
-      case 'full': setStitch(c.x,c.y,1); break;
-      case 'half': setStitch(c.x,c.y, S.halfDir==='/'?2:3); break;
-      case 'quarter': { var k=cornerFromHalf(c.halfx,c.halfy); setStitch(c.x,c.y,4,k); break; }
-      case 'three': { var k2=cornerFromHalf(c.halfx,c.halfy); setStitch(c.x,c.y,8,k2); break; }
+      case 'full': if(eraseMode) eraseStitch(c.x,c.y); else setStitch(c.x,c.y,1); break;
+      case 'half': if(eraseMode) eraseStitch(c.x,c.y); else setStitch(c.x,c.y, S.halfDir==='/'?2:3); break;
+      case 'quarter': { var k=cornerFromHalf(c.halfx,c.halfy); if(eraseMode) eraseStitch(c.x,c.y); else setStitch(c.x,c.y,4,k); break; }
+      case 'three': { var k2=cornerFromHalf(c.halfx,c.halfy); if(eraseMode) eraseStitch(c.x,c.y); else setStitch(c.x,c.y,8,k2); break; }
       case 'erase': eraseStitch(c.x,c.y); eraseBackAt(c.halfx,c.halfy); break;
       case 'fill': if(isStart) floodFillAt(c.x,c.y); break;
       case 'eye': if(isStart) eyedropAt(c.x,c.y); break;
