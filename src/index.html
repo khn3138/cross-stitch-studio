@@ -45,12 +45,14 @@
         <div>
           <h1>내 도안</h1>
           <p class="store-note"><span class="dot"></span><span id="store-note-text">이 기기 브라우저에 저장됨 · 기기 변경 전 전체 백업 권장</span></p>
+          <p class="store-note" id="autobackup-note" hidden></p>
         </div>
         <div class="lib-actions">
           <button class="btn primary" id="btn-new-pattern">＋ 새 도안</button>
           <button class="btn" id="btn-import-photo">사진으로 만들기</button>
           <button class="btn ghost" id="btn-open-file">파일 불러오기</button>
           <button class="btn ghost" id="btn-backup">전체 백업</button>
+          <span id="autobackup-box"></span>
         </div>
       </div>
       <div class="grid" id="lib-grid"></div>

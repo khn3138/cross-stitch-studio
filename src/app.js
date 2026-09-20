@@ -321,10 +321,11 @@ var LocalStore = (function(){
   function openIDB(){
     return new Promise(function(resolve,reject){
       if(!window.indexedDB){ reject(new Error('no idb')); return; }
-      var req = indexedDB.open('ttamttam', 1);
+      var req = indexedDB.open('ttamttam', 2);
       req.onupgradeneeded = function(){
         var d = req.result;
         if(!d.objectStoreNames.contains('patterns')) d.createObjectStore('patterns', {keyPath:'id'});
+        if(!d.objectStoreNames.contains('meta')) d.createObjectStore('meta', {keyPath:'key'});
       };
       req.onsuccess = function(){ resolve(req.result); };
       req.onerror = function(){ reject(req.error); };
@@ -332,6 +333,21 @@ var LocalStore = (function(){
   }
   function idbTx(storeMode){
     return db.transaction('patterns', storeMode).objectStore('patterns');
+  }
+  function getMeta(key){
+    if(mode!=='idb') return Promise.resolve(null);
+    return new Promise(function(resolve){
+      var r = db.transaction('meta','readonly').objectStore('meta').get(key);
+      r.onsuccess=function(){ resolve(r.result?r.result.value:null); };
+      r.onerror=function(){ resolve(null); };
+    });
+  }
+  function setMeta(key,value){
+    if(mode!=='idb') return Promise.resolve();
+    return new Promise(function(resolve,reject){
+      var r = db.transaction('meta','readwrite').objectStore('meta').put({key:key, value:value});
+      r.onsuccess=function(){ resolve(); }; r.onerror=function(){ reject(r.error); };
+    });
   }
   function init(){
     return openIDB().then(function(d){
@@ -408,7 +424,7 @@ var LocalStore = (function(){
       return Promise.resolve(Object.keys(mem).map(function(k){ return deserialize(mem[k]); }));
     }
   }
-  return { init:init, put:put, get:get, del:del, listAll:listAll, mode:function(){return mode;} };
+  return { init:init, put:put, get:get, del:del, listAll:listAll, mode:function(){return mode;}, getMeta:getMeta, setMeta:setMeta };
 })();
 
 /* ============================================================
@@ -488,11 +504,71 @@ var CloudStore = (function(){
 // 저장소 파사드: 로그인 상태에 따라 LocalStore ↔ CloudStore로 자동 전환
 var Data = {
   init: function(){ return Promise.all([LocalStore.init(), CloudStore.init()]); },
-  put: function(pat){ return (Auth.currentUser()?CloudStore:LocalStore).put(pat); },
+  put: function(pat){ return (Auth.currentUser()?CloudStore:LocalStore).put(pat).then(scheduleAutoBackup); },
   get: function(id){ return (Auth.currentUser()?CloudStore:LocalStore).get(id); },
-  del: function(id){ return (Auth.currentUser()?CloudStore:LocalStore).del(id); },
+  del: function(id){ return (Auth.currentUser()?CloudStore:LocalStore).del(id).then(scheduleAutoBackup); },
   listAll: function(){ return (Auth.currentUser()?CloudStore:LocalStore).listAll(); }
 };
+function scheduleAutoBackup(){
+  clearTimeout(scheduleAutoBackup._t);
+  scheduleAutoBackup._t = setTimeout(function(){ AutoBackup.writeNow(); }, 3000);
+}
+
+/* ============================================================
+   자동 백업 폴더 (선택) — 로컬 폴더 하나를 지정해두면 도안이 바뀔 때마다
+   그 폴더에 백업 JSON을 자동으로 다시 써준다. 그 폴더가 구글드라이브·
+   원드라이브 등 동기화 폴더 안이면 결과적으로 클라우드에도 자동 저장됨.
+   크롬/엣지(File System Access API 지원 브라우저)에서만 가능.
+   ============================================================ */
+var AutoBackup = (function(){
+  var dirHandle = null, enabled = false;
+  function supported(){ return !!window.showDirectoryPicker; }
+  function load(){
+    if(!supported()) return Promise.resolve();
+    return LocalStore.getMeta('autoBackupDir').then(function(h){
+      if(h){ dirHandle = h; enabled = true; }
+    });
+  }
+  function choose(){
+    if(!supported()) return Promise.reject(new Error('unsupported'));
+    return window.showDirectoryPicker({mode:'readwrite'}).then(function(h){
+      dirHandle = h; enabled = true;
+      return writeNow().then(function(){
+        // 핸들 저장에 실패해도(예: 브라우저 제약) 이번 세션에서는 계속 동작하게 둔다.
+        return LocalStore.setMeta('autoBackupDir', h).catch(function(e){ console.error('자동 백업 폴더 정보 저장 실패', e); });
+      });
+    });
+  }
+  function turnOff(){
+    dirHandle = null; enabled = false;
+    return LocalStore.setMeta('autoBackupDir', null);
+  }
+  function ensurePermission(){
+    if(!dirHandle) return Promise.resolve(false);
+    return dirHandle.queryPermission({mode:'readwrite'}).then(function(p){
+      if(p==='granted') return true;
+      return dirHandle.requestPermission({mode:'readwrite'}).then(function(p2){ return p2==='granted'; });
+    }).catch(function(){ return false; });
+  }
+  function writeNow(){
+    if(!enabled || !dirHandle) return Promise.resolve();
+    return ensurePermission().then(function(ok){
+      if(!ok) return;
+      return Data.listAll().then(function(list){
+        var data = { app:'ttamttam-backup', v:1, exported:Date.now(), patterns:list.map(serialize) };
+        return dirHandle.getFileHandle('ttamttam-auto-backup.json', {create:true}).then(function(fh){
+          return fh.createWritable();
+        }).then(function(w){
+          return w.write(JSON.stringify(data)).then(function(){ return w.close(); });
+        });
+      });
+    }).catch(function(e){ console.error('자동 백업 실패', e); });
+  }
+  return {
+    supported:supported, load:load, choose:choose, turnOff:turnOff, writeNow:writeNow,
+    isEnabled:function(){return enabled;}, folderName:function(){ return dirHandle?dirHandle.name:null; }
+  };
+})();
 
 /* ============================================================
    전역 상태
@@ -607,18 +683,23 @@ function confirmModal(title, msg, opts){
 
 /* ============================================================
    다운로드
+   PNG/PDF/JSON 내보내기는 브라우저 다운로드로 저장된다. 크롬/엣지에서
+   Settings -> Downloads -> "다운로드 전 저장 위치를 항상 확인" 을 켜두면
+   내보낼 때마다 저장 위치(구글드라이브 동기화 폴더 등)를 고를 수 있다 —
+   이건 브라우저 자체 기능이라 앱에서 별도 처리하지 않는다. (File System
+   Access API의 showSaveFilePicker는 캔버스/PDF 생성처럼 콜백이 여러 단계
+   중첩된 흐름에서 응답이 아예 멈추는 사례가 확인되어 내보내기에는 쓰지
+   않는다 — 대신 "자동 백업 폴더"는 버튼 클릭에서 바로 호출하므로 안전하다.)
    ============================================================ */
 function downloadBlob(name, blob){
   if(window.claude && window.claude.use){
-    try{
-      window.claude.use('downloads', {filename:name, blob:blob});
-      return;
-    }catch(e){}
+    try{ window.claude.use('downloads', {filename:name, blob:blob}); return Promise.resolve(true); }catch(e){}
   }
   var a=document.createElement('a');
   var url=URL.createObjectURL(blob);
   a.href=url; a.download=name; document.body.appendChild(a); a.click();
   setTimeout(function(){ URL.revokeObjectURL(url); a.remove(); }, 4000);
+  return Promise.resolve(true);
 }
 
 /* ============================================================
@@ -2558,8 +2639,9 @@ function exportPDF(){
           })(rx,ry);
         }
       }
-      doc.save(safeFileName(pat.name)+'.pdf');
-      toast('PDF를 저장했어요');
+      downloadBlob(safeFileName(pat.name)+'.pdf', doc.output('blob')).then(function(saved){
+        if(saved) toast('PDF를 저장했어요');
+      });
     }catch(err){ console.error(err); toast('PDF 생성에 실패했어요'); }
   }, 30);
 }
@@ -2770,6 +2852,30 @@ function handleAuthChange(user){
 /* ============================================================
    초기화
    ============================================================ */
+function renderAutoBackupUI(){
+  var box = $('#autobackup-box'), note = $('#autobackup-note');
+  if(!box || !AutoBackup.supported()){ if(box) box.innerHTML=''; if(note) note.hidden=true; return; }
+  if(AutoBackup.isEnabled()){
+    box.innerHTML = '<button class="btn ghost" id="btn-autobackup-off">자동 백업 끄기</button>';
+    $('#btn-autobackup-off',box).onclick = function(){
+      AutoBackup.turnOff().then(renderAutoBackupUI);
+      toast('자동 백업을 껐어요');
+    };
+    note.hidden = false;
+    note.innerHTML = '<span class="dot"></span>자동 백업 폴더: "'+escapeHtml(AutoBackup.folderName()||'')+'" (구글드라이브 등 동기화 폴더면 자동으로 클라우드에도 저장돼요)';
+  } else {
+    box.innerHTML = '<button class="btn ghost" id="btn-autobackup-on">자동 백업 폴더 설정</button>';
+    $('#btn-autobackup-on',box).onclick = function(){
+      AutoBackup.choose().then(function(){
+        renderAutoBackupUI();
+        toast('자동 백업을 시작했어요');
+      }).catch(function(err){
+        if(err && err.name!=='AbortError') toast('폴더를 선택하지 못했어요');
+      });
+    };
+    note.hidden = true;
+  }
+}
 function initLibraryButtons(){
   $('#btn-new-pattern').onclick = createNewPattern;
   $('#btn-import-photo').onclick = function(){ openImportModal(); };
@@ -2802,6 +2908,9 @@ function init(){
     renderLibrary();
     if(Auth.currentUser()) startCloudWatch();
     Auth.onChange(handleAuthChange);
+    return AutoBackup.load();
+  }).then(function(){
+    renderAutoBackupUI();
   });
 
   registerSW();

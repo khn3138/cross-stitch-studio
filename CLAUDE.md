@@ -18,6 +18,7 @@
 - 최초 로그인 시 그 기기의 로컬(비로그인) 도안이 있으면 "계정에 업로드할지" 확인 모달을 띄우고, 업로드 후에는 로컬 사본을 지운다(중복 방지).
 - `firebase-config.json`의 값(apiKey 등)은 비밀값이 아니다 — Firebase 웹 앱의 공개 식별자이며, 보안은 `firestore.rules`(각자 자기 uid 데이터만 read/write)와 Firebase 콘솔의 "승인된 도메인" 목록으로 보장한다. 그래도 실제 프로젝트 값을 채우는 건 저장소 소유자만 할 수 있는 일 — 필요한 설정은 `docs/TODO_USER.md` 참고.
 - app.js의 `LocalStore`(IndexedDB/localStorage)와 `CloudStore`(Firestore)는 동일한 인터페이스(`init/put/get/del/listAll`)를 구현하고, `Data` 파사드가 로그인 여부에 따라 자동으로 골라 쓴다. 새 저장 관련 기능은 반드시 `Data.*`를 통해서만 접근한다(`LocalStore`/`CloudStore`를 직접 호출하지 말 것).
+- `AutoBackup` 모듈(선택, 크롬/엣지): `showDirectoryPicker`로 고른 로컬 폴더에 `Data.put/del`이 일어날 때마다(3초 디바운스) 전체 백업 JSON을 다시 씀. 폴더 핸들은 IndexedDB의 `meta` 스토어(`LocalStore.getMeta/setMeta`, DB 버전 2)에 저장. **주의**: PNG/PDF/JSON 내보내기(`downloadBlob`)에는 `showSaveFilePicker`를 쓰지 않는다 — 캔버스/PDF 생성처럼 콜백이 중첩된 흐름에서 응답이 멈추는 현상을 실제로 확인했음. 저장 위치 선택은 `AutoBackup`처럼 버튼 클릭에서 즉시 호출하는 흐름에서만 안전.
 
 ## 모든 변경에서 반드시 할 것 (체크리스트)
 1. `VERSION` 올리기 (SemVer: 버그수정=patch, 기능추가=minor, 저장형식 비호환=major).
