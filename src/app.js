@@ -1482,9 +1482,12 @@ function addBackstitchSeg(x1,y1,x2,y2){
   var pIdx=ensurePaletteIdx(); if(pIdx<0) return;
   if(x1===x2&&y1===y2) return;
   var w2=S.pat.w*2,h2=S.pat.h*2;
+  // 완전히 같은 선분을 같은 색으로 또 그으면 지움(토글), 다른 색이면 색만 바꿈
   function place(X1,Y1,X2,Y2){
-    var exists = S.pat.backs.some(function(b){ return (b[0]===X1&&b[1]===Y1&&b[2]===X2&&b[3]===Y2)||(b[0]===X2&&b[1]===Y2&&b[2]===X1&&b[3]===Y1); });
-    if(!exists) S.pat.backs.push([X1,Y1,X2,Y2,pIdx]);
+    var idx = S.pat.backs.findIndex(function(b){ return (b[0]===X1&&b[1]===Y1&&b[2]===X2&&b[3]===Y2)||(b[0]===X2&&b[1]===Y2&&b[2]===X1&&b[3]===Y1); });
+    if(idx<0){ S.pat.backs.push([X1,Y1,X2,Y2,pIdx]); }
+    else if(S.pat.backs[idx][4]===pIdx){ S.pat.backs.splice(idx,1); }
+    else { S.pat.backs[idx][4]=pIdx; }
   }
   place(x1,y1,x2,y2);
   if(S.symH){ place(w2-x1,y1,w2-x2,y2); }
@@ -1511,9 +1514,12 @@ function addKnot(x,y){
   var pIdx=ensurePaletteIdx(); if(pIdx<0) return;
   var pt = nearestHalfPoint(x,y);
   var w2=S.pat.w*2,h2=S.pat.h*2;
+  // 같은 자리에 같은 색으로 또 찍으면 지움(토글), 다른 색이면 색만 바꿈
   function place(X,Y){
-    var exists=S.pat.knots.some(function(k){return k[0]===X&&k[1]===Y;});
-    if(!exists) S.pat.knots.push([X,Y,pIdx]);
+    var idx = S.pat.knots.findIndex(function(k){ return k[0]===X && k[1]===Y; });
+    if(idx<0){ S.pat.knots.push([X,Y,pIdx]); }
+    else if(S.pat.knots[idx][2]===pIdx){ S.pat.knots.splice(idx,1); }
+    else { S.pat.knots[idx][2]=pIdx; }
   }
   place(pt.x,pt.y);
   if(S.symH) place(w2-pt.x,pt.y);
