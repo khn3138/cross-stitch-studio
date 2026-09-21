@@ -592,6 +592,8 @@ var S = {
   symH: false, symV: false,
   onlySelected: false,
   showDone: false,
+  showRunCount: false,
+  showCmSize: false,
   zoom: 16,
   pan: {x:0,y:0},
   selection: null, // {x0,y0,x1,y1}
@@ -939,6 +941,7 @@ function enterEditor(){
   buildToolbar(); buildOptbar(); buildPanel();
   centerCanvas();
   drawEditor();
+  updateCmSizeBadge();
   setSaveState('saved');
 }
 function fitZoom(){
@@ -1232,6 +1235,10 @@ function drawEditor(){
   var highlightIdx = S.onlySelected && S.curPaletteIdx>=0 ? S.curPaletteIdx : null;
   renderRegion(ctx, pat, { sx:sx, sy:sy, ex:ex, ey:ey, cell:cell, ox:ox+sx*cell, oy:oy+sy*cell, mode:S.view.colorSym, grid:true, done:S.showDone, highlightIdx:highlightIdx, fabric:false });
 
+  if(S.showRunCount && cell>=14){
+    drawRunCounts(ctx, pat, sx, sy, ex, ey, ox+sx*cell, oy+sy*cell, cell);
+  }
+
   // 눈금자
   ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--surface')||'#fff';
   ctx.fillRect(0,0,cw,oy);
@@ -1300,6 +1307,40 @@ function drawPastePreview(ctx, ox, oy, sx, sy, cell){
     }
   }
   ctx.globalAlpha=1;
+}
+// 한 줄(가로)에 같은 색·같은 스티치 종류가 RUN_COUNT_THRESHOLD칸 이상 이어지면
+// 그 구간 가운데 칸에 개수를 표시 — 세다가 헷갈리는 것 방지용 보조 표시.
+var RUN_COUNT_THRESHOLD = 5;
+function drawRunCounts(ctx, pat, sx, sy, ex, ey, ox, oy, cell){
+  var w = pat.w;
+  ctx.save();
+  ctx.font = '700 '+Math.max(9,Math.round(cell*0.42))+'px var(--mono),monospace';
+  ctx.textAlign='center'; ctx.textBaseline='middle';
+  for(var y=sy; y<ey; y++){
+    var x=sx;
+    while(x<ex){
+      var i=y*w+x;
+      if(pat.types[i]===0 || pat.cells[i]<0){ x++; continue; }
+      var startX=x, idx0=pat.cells[i], t0=pat.types[i];
+      var runEnd=x+1;
+      while(runEnd<w && pat.cells[y*w+runEnd]===idx0 && pat.types[y*w+runEnd]===t0){ runEnd++; }
+      var runLen=runEnd-startX;
+      if(runLen>=RUN_COUNT_THRESHOLD){
+        var centerX = startX+Math.floor(runLen/2);
+        if(centerX>=sx && centerX<ex){
+          var px=ox+(centerX-sx)*cell+cell/2, py=oy+(y-sy)*cell+cell/2;
+          var label=String(runLen);
+          var tw=ctx.measureText(label).width;
+          ctx.fillStyle='rgba(255,255,255,0.9)';
+          ctx.fillRect(px-tw/2-3, py-cell*0.28, tw+6, cell*0.56);
+          ctx.fillStyle='#161616';
+          ctx.fillText(label, px, py+1);
+        }
+      }
+      x=runEnd;
+    }
+  }
+  ctx.restore();
 }
 
 /* ============================================================
@@ -1741,7 +1782,7 @@ function doResizeCanvas(nw,nh,anchor){
   var knots=S.pat.knots.map(function(k){ return [k[0]+offx*2,k[1]+offy*2,k[2]]; })
     .filter(function(k){ return k[0]>=0&&k[0]<=nw*2&&k[1]>=0&&k[1]<=nh*2; });
   S.pat.w=nw; S.pat.h=nh; S.pat.cells=cells; S.pat.types=types; S.pat.done=done; S.pat.backs=backs; S.pat.knots=knots;
-  markDirty(); centerCanvas(); drawEditor(); buildPanel();
+  markDirty(); centerCanvas(); drawEditor(); buildPanel(); updateCmSizeBadge();
 }
 
 /* ============================================================
@@ -2022,6 +2063,8 @@ function buildOptbar(){
     '<button class="chip'+(S.symV?' on':'')+'" id="chip-symv">↕ 상하대칭</button>'+
     '<button class="chip'+(S.onlySelected?' on':'')+'" id="chip-only">선택한 실만</button>'+
     '<button class="chip'+(S.showDone?' on':'')+'" id="chip-done">진행표시</button>'+
+    '<button class="chip'+(S.showRunCount?' on':'')+'" id="chip-runcount" title="한 줄에 같은 스티치가 5개 이상 이어지면 개수를 표시">연속 칸수</button>'+
+    '<button class="chip'+(S.showCmSize?' on':'')+'" id="chip-cmsize" title="캔버스 오른쪽 위에 완성 크기(cm) 표시">실측 크기</button>'+
     '<div class="div"></div>'+
     '<button class="icon-btn" id="zoom-out">−</button><span class="zoom-val" id="zoom-val">'+Math.round(S.zoom/16*100)+'%</span><button class="icon-btn" id="zoom-in">＋</button>'+
     '<button class="btn ghost sm" id="zoom-fit">맞춤</button>'+
@@ -2035,6 +2078,8 @@ function buildOptbar(){
   $('#chip-symv',ob).onclick=function(){ S.symV=!S.symV; buildOptbar(); };
   $('#chip-only',ob).onclick=function(){ S.onlySelected=!S.onlySelected; buildOptbar(); drawEditor(); };
   $('#chip-done',ob).onclick=function(){ S.showDone=!S.showDone; buildOptbar(); drawEditor(); };
+  $('#chip-runcount',ob).onclick=function(){ S.showRunCount=!S.showRunCount; buildOptbar(); drawEditor(); };
+  $('#chip-cmsize',ob).onclick=function(){ S.showCmSize=!S.showCmSize; buildOptbar(); updateCmSizeBadge(); };
   $('#zoom-out',ob).onclick=function(){ zoomBy(0.85); };
   $('#zoom-in',ob).onclick=function(){ zoomBy(1.18); };
   $('#zoom-fit',ob).onclick=function(){ S.zoom=fitZoom(); centerCanvas(); updateZoomLabel(); drawEditor(); };
@@ -2140,6 +2185,14 @@ function finishedSizeCm(pat){
   var fab=FABRICS[pat.fabric]||FABRICS.aida14;
   return { w: pat.w/fab.eff*2.54, h: pat.h/fab.eff*2.54 };
 }
+function updateCmSizeBadge(){
+  var el = $('#cm-size-badge');
+  if(!el) return;
+  if(!S.showCmSize || !S.pat){ el.hidden=true; return; }
+  var f = finishedSizeCm(S.pat);
+  el.hidden=false;
+  el.textContent = f.w.toFixed(1)+' × '+f.h.toFixed(1)+' cm';
+}
 function cutSizeCm(pat, marginCm){
   var f = finishedSizeCm(pat);
   return { w: f.w+marginCm*2, h: f.h+marginCm*2 };
@@ -2201,7 +2254,7 @@ function buildPanel(){
   $$('[data-menu]',root).forEach(function(b){
     b.onclick=function(e){ e.stopPropagation(); openThreadMenu(parseInt(b.dataset.menu,10), e.clientX, e.clientY); };
   });
-  $('#pi-fabric',root).onchange=function(e){ S.pat.fabric=e.target.value; markDirty(); buildPanel(); };
+  $('#pi-fabric',root).onchange=function(e){ S.pat.fabric=e.target.value; markDirty(); buildPanel(); updateCmSizeBadge(); };
   $('#pi-strands',root).onchange=function(e){ S.pat.strands=parseInt(e.target.value,10); markDirty(); buildPanel(); };
   $('#pi-margin',root).oninput=function(e){ S.pat._margin=parseFloat(e.target.value)||0; buildPanel(); };
 }
