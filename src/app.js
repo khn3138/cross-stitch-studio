@@ -1235,7 +1235,7 @@ function drawEditor(){
   var highlightIdx = S.onlySelected && S.curPaletteIdx>=0 ? S.curPaletteIdx : null;
   renderRegion(ctx, pat, { sx:sx, sy:sy, ex:ex, ey:ey, cell:cell, ox:ox+sx*cell, oy:oy+sy*cell, mode:S.view.colorSym, grid:true, done:S.showDone, highlightIdx:highlightIdx, fabric:false });
 
-  if(S.showRunCount && cell>=14){
+  if(S.showRunCount && cell>=18){
     drawRunCounts(ctx, pat, sx, sy, ex, ey, ox+sx*cell, oy+sy*cell, cell);
   }
 
@@ -1312,9 +1312,11 @@ function drawPastePreview(ctx, ox, oy, sx, sy, cell){
 // 그 구간 가운데 칸에 개수를 표시 — 세다가 헷갈리는 것 방지용 보조 표시.
 var RUN_COUNT_THRESHOLD = 5;
 function drawRunCounts(ctx, pat, sx, sy, ex, ey, ox, oy, cell){
+  // 가운데 하나에 총 개수 대신, 구간 안 칸마다 몇 번째인지(1,2,3...) 작게 표시
+  // — 실제로 세면서 스티치할 때 "지금 몇 번째"를 바로 알 수 있게.
   var w = pat.w;
   ctx.save();
-  ctx.font = '700 '+Math.max(9,Math.round(cell*0.42))+'px var(--mono),monospace';
+  ctx.font = '700 '+Math.max(7,Math.round(cell*0.3))+'px var(--mono),monospace';
   ctx.textAlign='center'; ctx.textBaseline='middle';
   for(var y=sy; y<ey; y++){
     var x=sx;
@@ -1326,13 +1328,13 @@ function drawRunCounts(ctx, pat, sx, sy, ex, ey, ox, oy, cell){
       while(runEnd<w && pat.cells[y*w+runEnd]===idx0 && pat.types[y*w+runEnd]===t0){ runEnd++; }
       var runLen=runEnd-startX;
       if(runLen>=RUN_COUNT_THRESHOLD){
-        var centerX = startX+Math.floor(runLen/2);
-        if(centerX>=sx && centerX<ex){
-          var px=ox+(centerX-sx)*cell+cell/2, py=oy+(y-sy)*cell+cell/2;
-          var label=String(runLen);
+        for(var xi=startX; xi<runEnd; xi++){
+          if(xi<sx || xi>=ex) continue;
+          var label=String(xi-startX+1);
+          var px=ox+(xi-sx)*cell+cell*0.24, py=oy+(y-sy)*cell+cell*0.24;
           var tw=ctx.measureText(label).width;
-          ctx.fillStyle='rgba(255,255,255,0.9)';
-          ctx.fillRect(px-tw/2-3, py-cell*0.28, tw+6, cell*0.56);
+          ctx.fillStyle='rgba(255,255,255,0.85)';
+          ctx.fillRect(px-tw/2-2, py-cell*0.18, tw+4, cell*0.36);
           ctx.fillStyle='#161616';
           ctx.fillText(label, px, py+1);
         }
