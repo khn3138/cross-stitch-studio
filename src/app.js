@@ -130,7 +130,8 @@ var TOOLS = [
   { id:'fill', key:'g', label:'채우기', icon: iconFill },
   { id:'eye', key:'i', label:'스포이드', icon: iconEye },
   { id:'select', key:'s', label:'선택', icon: iconSelect },
-  { id:'done', key:'d', label:'진행 체크', icon: iconDone }
+  { id:'done', key:'d', label:'진행 체크', icon: iconDone },
+  { id:'count', key:'c', label:'칸수 세기', icon: iconCount }
 ];
 
 /* corner mapping helpers */
@@ -153,6 +154,7 @@ function iconFill(){ return svg('<path d="M4 12l7-7 7 7-7 7z"/><path d="M4 12h14
 function iconEye(){ return svg('<path d="M17 3l4 4-11 11H6v-4z"/>'); }
 function iconSelect(){ return svg('<path d="M4 4h4M4 4v4M20 4h-4M20 4v4M4 20h4M4 20v-4M20 20h-4M20 20v-4"/>'); }
 function iconDone(){ return svg('<path d="M20 6 9 17l-5-5"/>'); }
+function iconCount(){ return svg('<path d="M4 18 10 8l4 6 6-10" opacity=".35"/><circle cx="4" cy="18" r="2" fill="currentColor" stroke="none"/><circle cx="10" cy="8" r="2" fill="currentColor" stroke="none"/><circle cx="14" cy="14" r="2" fill="currentColor" stroke="none"/><circle cx="20" cy="4" r="2" fill="currentColor" stroke="none"/>'); }
 function iconPalette(){ return svg('<circle cx="9" cy="9.5" r="4.5"/><circle cx="15" cy="9.5" r="4.5"/><circle cx="12" cy="15.5" r="4.5"/>'); }
 function iconLinkOn(){ return svg('<path d="M9 15 15 9"/><path d="M10 6l1.5-1.5a4 4 0 0 1 5.66 5.66L15.5 11.66"/><path d="M14 18l-1.5 1.5a4 4 0 0 1-5.66-5.66L8.5 12.34"/>'); }
 function iconLinkOff(){ return svg('<path d="M9 15 15 9" opacity=".35"/><path d="M10 6l1-1a4 4 0 0 1 5.66 5.66l-1 1"/><path d="M14 18l-1 1a4 4 0 0 1-5.66-5.66l1-1"/><path d="M4 4l16 16"/>'); }
@@ -594,6 +596,9 @@ var S = {
   showDone: false,
   showRunCount: false,
   showCmSize: false,
+  countPath: [], // '칸수 세기' 도구로 드래그한 칸 순서 [{x,y},...]
+  exportShowNumbers: false,
+  exportShowColor: true,
   zoom: 16,
   pan: {x:0,y:0},
   selection: null, // {x0,y0,x1,y1}
@@ -936,12 +941,14 @@ function enterEditor(){
   S.history=[]; S.future=[]; S.selection=null; S.clipboard=S.clipboard;
   S.curPaletteIdx = S.pat.palette.length?0:-1;
   S.recentColors = [];
+  S.countPath = [];
   S.tool='full'; S.zoom = fitZoom();
   $('#title-input').value = S.pat.name;
   buildToolbar(); buildOptbar(); buildPanel();
   centerCanvas();
   drawEditor();
   updateCmSizeBadge();
+  updateUndoRedoButtons();
   setSaveState('saved');
 }
 function fitZoom(){
@@ -997,6 +1004,12 @@ function pushHistory(){
   S.history.push(snapshot());
   if(S.history.length>HISTORY_MAX) S.history.shift();
   S.future.length=0;
+  updateUndoRedoButtons();
+}
+function updateUndoRedoButtons(){
+  var ub=$('#btn-undo'), rb=$('#btn-redo');
+  if(ub) ub.disabled = !S.history.length;
+  if(rb) rb.disabled = !S.future.length;
 }
 function applySnapshot(snap){
   S.pat.cells=snap.cells.slice(); S.pat.types=snap.types.slice(); S.pat.done=snap.done.slice();
@@ -1008,13 +1021,13 @@ function undo(){
   if(!S.history.length) return;
   S.future.push(snapshot());
   applySnapshot(S.history.pop());
-  fixCurPalette(); markDirty(); drawEditor(); buildPanel();
+  fixCurPalette(); markDirty(); drawEditor(); buildPanel(); updateUndoRedoButtons();
 }
 function redo(){
   if(!S.future.length) return;
   S.history.push(snapshot());
   applySnapshot(S.future.pop());
-  fixCurPalette(); markDirty(); drawEditor(); buildPanel();
+  fixCurPalette(); markDirty(); drawEditor(); buildPanel(); updateUndoRedoButtons();
 }
 function fixCurPalette(){
   if(S.curPaletteIdx>=S.pat.palette.length) S.curPaletteIdx = S.pat.palette.length-1;
@@ -1238,6 +1251,9 @@ function drawEditor(){
   if(S.showRunCount && cell>=18){
     drawRunCounts(ctx, pat, sx, sy, ex, ey, ox+sx*cell, oy+sy*cell, cell);
   }
+  if(S.countPath.length){
+    drawManualCount(ctx, sx, sy, ex, ey, ox+sx*cell, oy+sy*cell, cell);
+  }
 
   // 눈금자
   ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--surface')||'#fff';
@@ -1307,6 +1323,32 @@ function drawPastePreview(ctx, ox, oy, sx, sy, cell){
     }
   }
   ctx.globalAlpha=1;
+}
+// '칸수 세기' 도구: 드래그로 지나간 칸에 순서대로(1부터) 번호를 매김.
+// 색·스티치 종류나 방향과 무관하게 지나간 칸 전부를 셈. 도구를 유지한 채
+// 드래그를 여러 번 나눠 해도 번호가 이어짐(도구를 바꾸면 초기화, setTool 참고).
+function addCountCell(x,y){
+  if(!S.pat || x<0||y<0||x>=S.pat.w||y>=S.pat.h) return;
+  var last = S.countPath[S.countPath.length-1];
+  if(last && last.x===x && last.y===y) return;
+  S.countPath.push({x:x,y:y});
+}
+function drawManualCount(ctx, sx, sy, ex, ey, ox, oy, cell){
+  var accent = getComputedStyle(document.documentElement).getPropertyValue('--accent')||'#0D6663';
+  ctx.save();
+  ctx.font = '700 '+Math.max(7,Math.round(cell*0.3))+'px var(--mono),monospace';
+  ctx.textAlign='center'; ctx.textBaseline='middle';
+  S.countPath.forEach(function(cellPos, i){
+    if(cellPos.x<sx || cellPos.x>=ex || cellPos.y<sy || cellPos.y>=ey) return;
+    var label=String(i+1);
+    var px=ox+(cellPos.x-sx)*cell+cell*0.24, py=oy+(cellPos.y-sy)*cell+cell*0.24;
+    var tw=ctx.measureText(label).width;
+    ctx.fillStyle=accent;
+    ctx.fillRect(px-tw/2-2, py-cell*0.18, tw+4, cell*0.36);
+    ctx.fillStyle='#fff';
+    ctx.fillText(label, px, py+1);
+  });
+  ctx.restore();
 }
 // 한 줄(가로)에 같은 색·같은 스티치 종류가 RUN_COUNT_THRESHOLD칸 이상 이어지면
 // 그 구간 가운데 칸에 개수를 표시 — 세다가 헷갈리는 것 방지용 보조 표시.
@@ -1889,6 +1931,12 @@ function setupPointerEvents(){
       drawEditor();
       return;
     }
+    if(S.tool==='count'){
+      drag={type:'count', last:c};
+      doToolAt(c, true);
+      drawEditor();
+      return;
+    }
     pushHistory();
     var eraseMode = (S.tool==='full'||S.tool==='half'||S.tool==='quarter'||S.tool==='three') && stitchTargetMatches(c);
     drag={type:S.tool, last:c, startHalf:{x:c.halfx,y:c.halfy}, eraseMode:eraseMode};
@@ -1918,6 +1966,8 @@ function setupPointerEvents(){
       markDirty(); drawEditor();
     } else if(drag.type==='select'){
       // selection already updated live
+    } else if(drag.type==='count'){
+      // 도안을 바꾸지 않음 — 저장 상태 갱신 불필요
     } else if(drag.type==='toolpan'){
       // 이동 도구: 저장할 변경 없음
     } else {
@@ -1956,6 +2006,7 @@ function setupPointerEvents(){
         if(isStart){ S.selection={x0:c.x,y0:c.y,x1:c.x,y1:c.y}; }
         else if(S.selection){ S.selection.x1=c.x; S.selection.y1=c.y; }
         break;
+      case 'count': addCountCell(c.x,c.y); break;
     }
   }
 }
@@ -1989,6 +2040,7 @@ document.addEventListener('keydown', function(e){
    ============================================================ */
 function setTool(id){
   if(id!==S.tool) S.prevTool=S.tool;
+  if(id!=='count' && S.countPath.length){ S.countPath=[]; drawEditor(); }
   S.tool=id;
   buildToolbar();
   var hint=$('#hint');
@@ -1996,7 +2048,8 @@ function setTool(id){
     move:'드래그해서 캔버스를 움직여요', full:'클릭·드래그로 풀 스티치', half:'클릭·드래그로 하프 스티치',
     quarter:'칸 안 위치에 따라 모서리가 정해져요', three:'칸 안 위치에 따라 반대 모서리가 비어요',
     back:'드래그로 백스티치 선을 그어요', knot:'클릭해서 프렌치 노트', erase:'클릭·드래그로 지워요',
-    fill:'클릭한 영역을 채워요', eye:'클릭해서 실을 선택해요', select:'드래그로 영역을 선택해요', done:'클릭해서 진행 체크'
+    fill:'클릭한 영역을 채워요', eye:'클릭해서 실을 선택해요', select:'드래그로 영역을 선택해요', done:'클릭해서 진행 체크',
+    count:'드래그로 지나간 칸에 순서대로 번호를 매겨요 (여러 번 나눠 드래그해도 이어서 셈)'
   };
   hint.hidden=false; hint.textContent=msgs[id]||'';
   clearTimeout(setTool._t); setTool._t=setTimeout(function(){ hint.hidden=true; },2200);
@@ -2438,8 +2491,8 @@ function initTopbarMenus(){
   $('#btn-export-menu').onclick = function(e){
     var r=e.target.getBoundingClientRect();
     openMenu([
-      { label:'PDF로 내보내기', action:function(){ exportPDF(); } },
-      { label:'PNG로 내보내기', action:function(){ exportPNG(); } },
+      { label:'PDF로 내보내기', action:function(){ openExportOptionsModal(exportPDF); } },
+      { label:'PNG로 내보내기', action:function(){ openExportOptionsModal(exportPNG); } },
       { label:'도안 파일(JSON)', action:function(){ var blob=new Blob([JSON.stringify(serialize(S.pat))],{type:'application/json'}); downloadBlob(safeFileName(S.pat.name)+'.json', blob); } }
     ], r.left, r.bottom+6);
   };
@@ -2768,6 +2821,25 @@ function labDist2(a,b){ var dl=a.L-b.L,da=a.a-b.a,db=a.b-b.b; return dl*dl+da*da
 /* ============================================================
    PDF / PNG 출력
    ============================================================ */
+function openExportOptionsModal(onConfirm){
+  var hasCount = S.countPath.length>0;
+  var modal = openModal({
+    title:'내보내기 옵션',
+    bodyHTML:
+      '<div class="stack">'+
+        '<label class="check"><input type="checkbox" id="exp-color"'+(S.exportShowColor?' checked':'')+'>컬러로 표시 (끄면 기호만 흑백으로)</label>'+
+        '<label class="check"><input type="checkbox" id="exp-numbers"'+(S.exportShowNumbers&&hasCount?' checked':'')+(hasCount?'':' disabled')+'>칸수 세기 번호 포함'+(hasCount?'':' — 표시된 번호가 없어요')+'</label>'+
+      '</div>',
+    footerHTML: '<button class="btn ghost" id="exp-cancel">취소</button><button class="btn primary" id="exp-ok">내보내기</button>'
+  });
+  $('#exp-cancel',modal).onclick=closeModal;
+  $('#exp-ok',modal).onclick=function(){
+    S.exportShowColor = $('#exp-color',modal).checked;
+    S.exportShowNumbers = hasCount && $('#exp-numbers',modal).checked;
+    closeModal();
+    onConfirm();
+  };
+}
 var A4W=1240, A4H=1754;
 function pageCanvas(scale){
   var c=document.createElement('canvas'); c.width=A4W*scale; c.height=A4H*scale;
@@ -2899,7 +2971,10 @@ function drawChartPage(ctx, rx, ry, pw0, ph0, pn, total){
   ctx.fillStyle='#1B232A'; ctx.font='700 15px sans-serif'; ctx.textAlign='left';
   ctx.fillText(pat.name+' · 페이지 '+pn+'/'+total+' · 열 '+sx+'–'+(ex-1)+', 행 '+sy+'–'+(ey-1), 40, 36);
   var ox=48, oy=64;
-  renderRegion(ctx, pat, {sx:sx,sy:sy,ex:ex,ey:ey,cell:cell,ox:ox,oy:oy,mode:S._pdfMode||'symbol',grid:true,fabric:true,done:false});
+  renderRegion(ctx, pat, {sx:sx,sy:sy,ex:ex,ey:ey,cell:cell,ox:ox,oy:oy,mode:S.exportShowColor?'both':'symbol',grid:true,fabric:true,done:false});
+  if(S.exportShowNumbers && S.countPath.length){
+    drawManualCount(ctx, sx, sy, ex, ey, ox, oy, cell);
+  }
   ctx.strokeStyle='#8a938e'; ctx.strokeRect(ox,oy,(ex-sx)*cell,(ey-sy)*cell);
   ctx.fillStyle='#5B676E'; ctx.font='10px monospace'; ctx.textAlign='center';
   for(var gx=sx;gx<=ex;gx++){ if(gx%10!==0) continue; ctx.fillText(String(gx), ox+(gx-sx)*cell, oy-6); }
@@ -2912,7 +2987,10 @@ function exportPNG(){
   var c=document.createElement('canvas'); c.width=pat.w*cell+40; c.height=pat.h*cell+40;
   var ctx=c.getContext('2d');
   ctx.fillStyle='#fff'; ctx.fillRect(0,0,c.width,c.height);
-  renderRegion(ctx, pat, {sx:0,sy:0,ex:pat.w,ey:pat.h,cell:cell,ox:20,oy:20,mode:S.view.colorSym,grid:true,fabric:true,done:S.showDone});
+  renderRegion(ctx, pat, {sx:0,sy:0,ex:pat.w,ey:pat.h,cell:cell,ox:20,oy:20,mode:S.exportShowColor?'both':'symbol',grid:true,fabric:true,done:S.showDone});
+  if(S.exportShowNumbers && S.countPath.length){
+    drawManualCount(ctx, 0, 0, pat.w, pat.h, 20, 20, cell);
+  }
   c.toBlob(function(blob){ downloadBlob(safeFileName(pat.name)+'.png', blob); }, 'image/png');
 }
 
