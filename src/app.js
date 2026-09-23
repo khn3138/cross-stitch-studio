@@ -597,6 +597,8 @@ var S = {
   showRunCount: false,
   showCmSize: false,
   countPath: [], // '칸수 세기' 도구로 드래그한 칸 순서 [{x,y},...]
+  countMode: 'add', // add | erase
+  countFilter: 'all', // all | stitched | empty
   exportShowNumbers: false,
   exportShowColor: true,
   zoom: 16,
@@ -1325,13 +1327,25 @@ function drawPastePreview(ctx, ox, oy, sx, sy, cell){
   ctx.globalAlpha=1;
 }
 // '칸수 세기' 도구: 드래그로 지나간 칸에 순서대로(1부터) 번호를 매김.
-// 색·스티치 종류나 방향과 무관하게 지나간 칸 전부를 셈. 도구를 유지한 채
-// 드래그를 여러 번 나눠 해도 번호가 이어짐(도구를 바꾸면 초기화, setTool 참고).
+// 도구를 유지한 채 드래그를 여러 번 나눠 해도 번호가 이어짐(도구를 바꾸면
+// 초기화, setTool 참고). S.countMode가 'erase'면 지나간 칸의 번호를 지움.
+// S.countFilter로 대상을 전체/스티치 있는 칸/빈 칸으로 제한할 수 있음.
+// 이미 번호가 매겨진 칸을 다시 지나가도(add 모드) 기존 번호를 그대로 두고
+// 무시함 — 새로 추가하면 그 칸이 마지막 번호로 다시 그려져 기존 번호가
+// 사라진 것처럼 보이는 문제가 있었음.
 function addCountCell(x,y){
   if(!S.pat || x<0||y<0||x>=S.pat.w||y>=S.pat.h) return;
-  var last = S.countPath[S.countPath.length-1];
-  if(last && last.x===x && last.y===y) return;
+  if(S.countMode==='erase'){ removeCountCell(x,y); return; }
+  var exists = S.countPath.some(function(p){ return p.x===x && p.y===y; });
+  if(exists) return;
+  var type = S.pat.types[y*S.pat.w+x];
+  if(S.countFilter==='stitched' && type===0) return;
+  if(S.countFilter==='empty' && type!==0) return;
   S.countPath.push({x:x,y:y});
+}
+function removeCountCell(x,y){
+  var idx = S.countPath.findIndex(function(p){ return p.x===x && p.y===y; });
+  if(idx>=0) S.countPath.splice(idx,1);
 }
 function drawManualCount(ctx, sx, sy, ex, ey, ox, oy, cell){
   var accent = getComputedStyle(document.documentElement).getPropertyValue('--accent')||'#0D6663';
@@ -2043,13 +2057,14 @@ function setTool(id){
   if(id!=='count' && S.countPath.length){ S.countPath=[]; drawEditor(); }
   S.tool=id;
   buildToolbar();
+  buildOptbar();
   var hint=$('#hint');
   var msgs={
     move:'드래그해서 캔버스를 움직여요', full:'클릭·드래그로 풀 스티치', half:'클릭·드래그로 하프 스티치',
     quarter:'칸 안 위치에 따라 모서리가 정해져요', three:'칸 안 위치에 따라 반대 모서리가 비어요',
     back:'드래그로 백스티치 선을 그어요', knot:'클릭해서 프렌치 노트', erase:'클릭·드래그로 지워요',
     fill:'클릭한 영역을 채워요', eye:'클릭해서 실을 선택해요', select:'드래그로 영역을 선택해요', done:'클릭해서 진행 체크',
-    count:'드래그로 지나간 칸에 순서대로 번호를 매겨요 (여러 번 나눠 드래그해도 이어서 셈)'
+    count:'드래그로 지나간 칸에 순서대로 번호를 매겨요 (옵션바에서 추가/지우기, 대상 칸을 고를 수 있어요)'
   };
   hint.hidden=false; hint.textContent=msgs[id]||'';
   clearTimeout(setTool._t); setTool._t=setTimeout(function(){ hint.hidden=true; },2200);
@@ -2114,6 +2129,11 @@ function buildOptbar(){
     '</div>'+
     '<div class="div"></div>'+
     (S.tool==='half'? ('<div class="seg" id="seg-half">'+segDir('/','/')+segDir('\\','\\')+'</div><div class="div"></div>') : '')+
+    (S.tool==='count'? (
+      '<div class="seg" id="seg-count-mode">'+segCountMode('add','추가')+segCountMode('erase','지우기')+'</div>'+
+      '<div class="seg" id="seg-count-filter">'+segCountFilter('all','전체')+segCountFilter('stitched','도안 있는 칸만')+segCountFilter('empty','빈 칸만')+'</div>'+
+      '<div class="div"></div>'
+    ) : '')+
     '<button class="chip'+(S.symH?' on':'')+'" id="chip-symh">↔ 좌우대칭</button>'+
     '<button class="chip'+(S.symV?' on':'')+'" id="chip-symv">↕ 상하대칭</button>'+
     '<button class="chip'+(S.onlySelected?' on':'')+'" id="chip-only">선택한 실만</button>'+
@@ -2127,8 +2147,12 @@ function buildOptbar(){
     '<button class="btn ghost sm only-mobile" id="btn-panel-toggle2">실·정보</button>';
   function seg(v,label){ return '<button data-view="'+v+'" class="'+(S.view.colorSym===v?'on':'')+'">'+label+'</button>'; }
   function segDir(v,label){ return '<button data-dir="'+v+'" class="'+(S.halfDir===v?'on':'')+'">'+label+'</button>'; }
+  function segCountMode(v,label){ return '<button data-count-mode="'+v+'" class="'+(S.countMode===v?'on':'')+'">'+label+'</button>'; }
+  function segCountFilter(v,label){ return '<button data-count-filter="'+v+'" class="'+(S.countFilter===v?'on':'')+'">'+label+'</button>'; }
   $('#seg-view',ob).onclick=function(e){ var b=e.target.closest('[data-view]'); if(!b) return; S.view.colorSym=b.dataset.view; buildOptbar(); drawEditor(); };
   var segHalf=$('#seg-half',ob); if(segHalf) segHalf.onclick=function(e){ var b=e.target.closest('[data-dir]'); if(!b) return; S.halfDir=b.dataset.dir; buildOptbar(); };
+  var segCM=$('#seg-count-mode',ob); if(segCM) segCM.onclick=function(e){ var b=e.target.closest('[data-count-mode]'); if(!b) return; S.countMode=b.dataset.countMode; buildOptbar(); };
+  var segCF=$('#seg-count-filter',ob); if(segCF) segCF.onclick=function(e){ var b=e.target.closest('[data-count-filter]'); if(!b) return; S.countFilter=b.dataset.countFilter; buildOptbar(); };
   $('#chip-symh',ob).onclick=function(){ S.symH=!S.symH; buildOptbar(); };
   $('#chip-symv',ob).onclick=function(){ S.symV=!S.symV; buildOptbar(); };
   $('#chip-only',ob).onclick=function(){ S.onlySelected=!S.onlySelected; buildOptbar(); drawEditor(); };
